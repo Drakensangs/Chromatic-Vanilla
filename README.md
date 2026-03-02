@@ -52,4 +52,4 @@ Drakensangs
 <img width="265" height="245" alt="Untitled2" src="https://github.com/user-attachments/assets/9afa68fc-a29e-4c80-96ea-25e99800a323" />
 <img width="403" height="79" alt="Untitled6" src="https://github.com/user-attachments/assets/e7d98f4c-43e2-4d84-bd3b-3ec0b4813cf2" />
 <img width="400" height="752" alt="Untitled" src="https://github.com/user-attachments/assets/316332a9-956b-4c29-ae45-444c98f6e204" />
-<img width="546" height="397" alt="Untitled5" src="https://github.com/user-attachments/assets/2c9f22d9-d585-4d29-91b7-53693d4377fd" />
+<img width="542" height="397" alt="Untitled5" src="https://github.com/user-attachments/assets/d7a421bd-b0d4-479b-afe0-9dc5ef7a1ce1" />
