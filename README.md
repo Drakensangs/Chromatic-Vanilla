@@ -26,13 +26,15 @@ Type  `/chromatic` or `/chrc` and one of these commands:
 
 Chromatic detects and color codes tooltips from the following addons:
 
-**Atlas** & **AtlasLoot**
+**AdvancedTradeSkillWindow2**
+
+**AtlasLoot**
 
 **aux**
 
 **pfUI**
 
-**ShaguTweaks** (equip-compare module)
+**ShaguTweaks**
 
 **Tmog**
 
