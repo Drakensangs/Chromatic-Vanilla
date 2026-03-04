@@ -1,17 +1,5 @@
 -- Chromatic for WoW 1.12.1
--- Merged addon: damage-type coloring (Chroma), item rarity border coloring
--- (TrueColors), and class-name coloring on tooltips (ClassColoredItems).
---
--- Config (ChromaticConfig saved variable):
---   borders      — rarity-coloured tooltip borders
---   classcolor   — "Classes:" line class-name coloring
---   elementcolor — element type coloring in tooltip text
---
--- Slash commands:  /chromatic  or  /chrc
---   border   Toggle rarity tooltip borders
---   color    Toggle class name color coding
---   element  Toggle element type color coding
---   status   Show current settings
+-- Damage-type coloring, item rarity border coloring, and class-name coloring on tooltips.
 
 -- ============================================================
 -- § 0  Localized globals & shared utilities
@@ -44,30 +32,39 @@ local getglobal = getglobal
 local type      = type
 local floor     = math.floor
 local tonumber  = tonumber
+local UnitName  = UnitName
+local IsAddOnLoaded = IsAddOnLoaded
 
 local origCreateFrame = CreateFrame  -- captured before our CreateFrame override
 
 -- ============================================================
--- § 1  Chroma — damage-type colorization
+-- § 1  Damage-type colorization
 -- ============================================================
 
--- ChromaticConfig is a SavedVariable populated by the game before
--- VARIABLES_LOADED fires.  We must NOT initialise it here at top-level load
--- time because SavedVariables are not yet available.  The locals below start
--- as true (all features on) and are updated to the saved values inside the
--- VARIABLES_LOADED handler.
 local cfgBorders      = true
 local cfgClassColor   = true
 local cfgElementColor = true
+
+-- Result cache for ProcessDamageLine — declared here so RefreshConfig can wipe it.
+local lineResultCache     = {}
+local lineResultCacheSize = 0
+local LINE_CACHE_MAX      = 512
 
 local function RefreshConfig()
     local cfg     = ChromaticConfig
     cfgBorders      = cfg.borders
     cfgClassColor   = cfg.classcolor
     cfgElementColor = cfg.elementcolor
+    -- Wipe the line result cache: toggling element color changes what
+    -- ProcessDamageLine returns for every previously cached input.
+    lineResultCache     = {}
+    lineResultCacheSize = 0
 end
 
--- Temporary at load time only; nil'd after PASS array construction.
+-- Guild Charter (5863): body may contain element keywords (Fire, Frost, etc.)
+-- that must not be recolored.
+local ITEM_ELEMENT_SKIP = { [5863] = true }
+
 local DAMAGE_COLORS = {
     ["Arcane"] = "|cFFFF66FF",
     ["Fire"]   = "|cFFFF0000",
@@ -78,11 +75,12 @@ local DAMAGE_COLORS = {
 }
 
 local EXCEPTIONS = {
-    "Shadow F", "Holy F",   "Arcane M", "Holy S",   "Holy L",
-    "Shadow Spr", "Shadow M", "Shadow B", "Holy T",  "Holy e",
-    "d Fire",   "Arcane E", "Frost Sh", "Arcane C",  "ul Fire",
-    "f Fire",   "Fire S",   "Shadow T",   "Shadow P",   "Shadow W",
-    "Holy W",   "Holy P",   "m Fire",
+"Arcane Intellect", "Arcane Brilliance", "Arcane Explosion", "Arcane Missiles", "Arcane Instability", "Arcane Talents", "Arcane Resilience", "Arcane Shot", "Arcane Detonation", "Arcane Protection", "Arcane Crystal", "Arcane Elixir", "Arcane Powder", "Arcane Bomb", 
+"Fire Talents", "Fire Ward", "Fire Shield", "Fire Blast", "Inner Fire", "Faerie Fire", "Fire Totem", "Fire Nova", "Fire Resistance Totem", "fire every", "Fire trap", "Rapid Fire", "Fire Oil", "Elemental Fire", "Essence of Fire", "Heart of Fire", "of Fire", "Fire Protection", 
+"Frost Talents", "Frost Nova", "Frost Armor", "Frost Shock", "Frost Trap", "Frost trap", "frost trap", "Frost Resistance Totem", "of Frost", "Frost Protection", "Frost Oil", "Frost Tiger", 
+"Shadow Talents", "Shadow Flame", "Shadow Bolt", "Shadow Word", "Shadow energy", "Shadow Trance", "Shadow Oil", "Shadow Silk", "Zandalarian Shadow", "of Shadow", "Shadow Protection", "Shadow Crescent", "Shadow Hood", "Shadow Goggles", "Flash Shadow", 
+"Holy Talents", "Holy Shield", "Holy Shock", "Holy Light", "Holy Fire", "Holy Power", "Holy Candle", 
+"Nature's Guard", "Nature's Grace", "of nature", "of Nature", "Nature Protection", 
 }
 local numExceptions = table.getn(EXCEPTIONS)
 
@@ -91,143 +89,182 @@ for i = 1, numExceptions do
     PLACEHOLDERS[i] = "\001P" .. i .. "\001"
 end
 
--- Single PASS array per damage type with all four passes interleaved.
--- Layout per entry (indices 1-40):
---   1- 8 : Resistance        patterns (4 pat/repl pairs, always title case)
---   9-16 : Spell Damage      patterns (always title case)
---  17-24 : Damage title case patterns (item stat lines: "+X Shadow Damage")
---  25-32 : Damage lower case patterns (spell descriptions: "X Shadow damage")
---  33-40 : Standalone        patterns
--- DTYPE_NAME[i]        : plain keyword for per-type presence check.
--- STANDALONE_PREFIX[i] : color+name used by the standalone already-colored guard.
 local PASS              = {}
 local DTYPE_NAME        = {}
+local DTYPE_NAME_LOWER  = {}
 local STANDALONE_PREFIX = {}
+local SPACE_PREFIX      = {}  -- " Fire", " Frost", etc. pre-built to avoid runtime concat
 
 do
     local ORDER = { "Arcane", "Fire", "Frost", "Holy", "Nature", "Shadow" }
     for n, dt in ipairs(ORDER) do
         local color = DAMAGE_COLORS[dt]
-        local cr  = color .. dt .. " Resistance|r"
-        local csd = color .. dt .. " Spell Damage|r"
-        local cd  = color .. dt .. " Damage|r"
-        local cs  = color .. dt .. "|r"
+        local dtl = strlower(dt)   -- lowercase form: "arcane", "fire", etc.
+        local cr  = color .. dt  .. " Resistance|r"
+        local csd = color .. dt  .. " Spell Damage|r"
+        local cd  = color .. dt  .. " Damage|r"
+        local cs  = color .. dt  .. "|r"
+        local csl = color .. dtl .. "|r"   -- lowercase element, e.g. |cFF...|fire|r
 
-        -- Item stat lines use title case: "+15 Shadow Damage", "+20 Shadow Resistance".
-        -- Spell description lines use sentence case: "dealing 100 Shadow damage".
-        -- For the lowercase form we colorize the element word ONLY and leave
-        -- " damage" as plain text, preserving the original casing and wording.
         PASS[n] = {
-            -- Resistance (1-8)  — always title case
+            -- Resistance title case (1-8)
             "([^%a])" .. dt .. " Resistance([^%a])", "%1" .. cr  .. "%2",
             "^"       .. dt .. " Resistance([^%a])",        cr  .. "%1",
             "([^%a])" .. dt .. " Resistance$",       "%1" .. cr,
             "^"       .. dt .. " Resistance$",               cr,
-            -- Spell Damage (9-16) — always title case
+            -- Spell Damage (9-16)
             "([^%a])" .. dt .. " Spell Damage([^%a])", "%1" .. csd .. "%2",
             "^"       .. dt .. " Spell Damage([^%a])",        csd .. "%1",
             "([^%a])" .. dt .. " Spell Damage$",       "%1" .. csd,
             "^"       .. dt .. " Spell Damage$",               csd,
-            -- Damage title case (17-24) — item stat lines: colorize full phrase
+            -- Damage title case (17-24)
             "([^%a])" .. dt .. " Damage([^%a])", "%1" .. cd .. "%2",
             "^"       .. dt .. " Damage([^%a])",        cd .. "%1",
             "([^%a])" .. dt .. " Damage$",       "%1" .. cd,
             "^"       .. dt .. " Damage$",               cd,
-            -- Damage lower case (25-32) — spell descriptions: colorize element only,
-            -- leave " damage" as-is so the original text is not altered.
+            -- Damage lower case (25-32): colorize element word only, leave " damage" as-is
             "([^%a])" .. dt .. " damage([^%a])", "%1" .. cs .. " damage%2",
             "^"       .. dt .. " damage([^%a])",        cs .. " damage%1",
             "([^%a])" .. dt .. " damage$",       "%1" .. cs .. " damage",
             "^"       .. dt .. " damage$",               cs .. " damage",
-            -- Standalone (33-40)
+            -- Standalone title case (33-40)
             "([^%a])" .. dt .. "([^%a])", "%1" .. cs .. "%2",
             "^"       .. dt .. "([^%a])",        cs .. "%1",
             "([^%a])" .. dt .. "$",       "%1" .. cs,
             "^"       .. dt .. "$",               cs,
+            -- Resistance lower case (41-48): colorize element word only, preserve lowercase, leave " resistance" as-is
+            "([^%a])" .. dtl .. " resistance([^%a])", "%1" .. csl .. " resistance%2",
+            "^"       .. dtl .. " resistance([^%a])",        csl .. " resistance%1",
+            "([^%a])" .. dtl .. " resistance$",       "%1" .. csl .. " resistance",
+            "^"       .. dtl .. " resistance$",               csl .. " resistance",
+            -- Standalone lower case (49-56): colorize element word only, preserve lowercase
+            "([^%a])" .. dtl .. "([^%a])", "%1" .. csl .. "%2",
+            "^"       .. dtl .. "([^%a])",        csl .. "%1",
+            "([^%a])" .. dtl .. "$",       "%1" .. csl,
+            "^"       .. dtl .. "$",               csl,
         }
         DTYPE_NAME[n]        = dt
+        DTYPE_NAME_LOWER[n]  = dtl
         STANDALONE_PREFIX[n] = color .. dt
+        SPACE_PREFIX[n]      = " " .. dt
     end
 end
 local numDamageTypes = 6
 
--- DAMAGE_COLORS not needed at runtime; free its memory.
 DAMAGE_COLORS = nil
 
+-- Pre-allocated reuse table: avoids per-call boolean allocation in ProcessDamageLine.
 local protectedPhrases = {}
+for i = 1, numExceptions do protectedPhrases[i] = false end
 
 local function ProcessDamageLine(text)
     if not cfgElementColor then return text end
 
-    -- Fast exit: bail if none of the six keywords appear at all.
+    local cached = lineResultCache[text]
+    if cached ~= nil then return cached end
+
+    -- Fast early-out: scan for any damage keyword (title-case or lower-case)
+    -- before doing any real work.
     local anyFound = false
     for i = 1, numDamageTypes do
-        if strfind(text, DTYPE_NAME[i], 1, true) then
+        if strfind(text, DTYPE_NAME[i], 1, true)
+        or strfind(text, DTYPE_NAME_LOWER[i], 1, true) then
             anyFound = true
             break
         end
     end
-    if not anyFound then return text end
+    if not anyFound then
+        -- Cache the no-op result so this line is skipped entirely next time.
+        if lineResultCacheSize >= LINE_CACHE_MAX then
+            lineResultCache     = {}
+            lineResultCacheSize = 0
+        end
+        lineResultCache[text] = text
+        lineResultCacheSize   = lineResultCacheSize + 1
+        return text
+    end
 
     local newText = text
 
+    -- Protect exception phrases with placeholders.
+    -- Track which ones were found so we only restore those.
+    local anyProtected = false
     for i = 1, numExceptions do
         if strfind(newText, EXCEPTIONS[i], 1, true) then
             newText = strgsub(newText, EXCEPTIONS[i], PLACEHOLDERS[i])
             protectedPhrases[i] = true
+            anyProtected = true
         else
             protectedPhrases[i] = false
         end
     end
 
     for i = 1, numDamageTypes do
-        if strfind(newText, DTYPE_NAME[i], 1, true) then
+        local hasTitle = strfind(newText, DTYPE_NAME[i], 1, true)
+        if hasTitle then
             local p = PASS[i]
-            -- Resistance
             newText = strgsub(newText, p[1],  p[2])
             newText = strgsub(newText, p[3],  p[4])
             newText = strgsub(newText, p[5],  p[6])
             newText = strgsub(newText, p[7],  p[8])
-            -- Spell Damage
             newText = strgsub(newText, p[9],  p[10])
             newText = strgsub(newText, p[11], p[12])
             newText = strgsub(newText, p[13], p[14])
             newText = strgsub(newText, p[15], p[16])
-            -- Damage (title case)
             newText = strgsub(newText, p[17], p[18])
             newText = strgsub(newText, p[19], p[20])
             newText = strgsub(newText, p[21], p[22])
             newText = strgsub(newText, p[23], p[24])
-            -- Damage (lower case — spell descriptions)
             newText = strgsub(newText, p[25], p[26])
             newText = strgsub(newText, p[27], p[28])
             newText = strgsub(newText, p[29], p[30])
             newText = strgsub(newText, p[31], p[32])
-            -- Standalone (only if not already colored)
-            if not strfind(newText, STANDALONE_PREFIX[i], 1, true) then
+            if not strfind(newText, STANDALONE_PREFIX[i], 1, true)
+            or strfind(newText, SPACE_PREFIX[i], 1, true) then
                 newText = strgsub(newText, p[33], p[34])
                 newText = strgsub(newText, p[35], p[36])
                 newText = strgsub(newText, p[37], p[38])
                 newText = strgsub(newText, p[39], p[40])
             end
         end
-    end
-
-    for i = 1, numExceptions do
-        if protectedPhrases[i] then
-            newText = strgsub(newText, PLACEHOLDERS[i], EXCEPTIONS[i])
+        if strfind(newText, DTYPE_NAME_LOWER[i], 1, true) then
+            local p = PASS[i]
+            newText = strgsub(newText, p[41], p[42])
+            newText = strgsub(newText, p[43], p[44])
+            newText = strgsub(newText, p[45], p[46])
+            newText = strgsub(newText, p[47], p[48])
+            newText = strgsub(newText, p[49], p[50])
+            newText = strgsub(newText, p[51], p[52])
+            newText = strgsub(newText, p[53], p[54])
+            newText = strgsub(newText, p[55], p[56])
         end
     end
+
+    -- Restore protected phrases (only if any were found).
+    if anyProtected then
+        for i = 1, numExceptions do
+            if protectedPhrases[i] then
+                newText = strgsub(newText, PLACEHOLDERS[i], EXCEPTIONS[i])
+            end
+        end
+    end
+
+    -- Store result. Input text that needed no changes maps to itself.
+    if lineResultCacheSize >= LINE_CACHE_MAX then
+        lineResultCache     = {}
+        lineResultCacheSize = 0
+    end
+    lineResultCache[text] = newText
+    lineResultCacheSize   = lineResultCacheSize + 1
 
     return newText
 end
 
 -- ============================================================
--- § 2  ClassColoredItems — class-name colorization
+-- § 2  Class-name colorization
 -- ============================================================
 
--- Two flat parallel arrays: no inner-table pointer indirection per iteration.
--- Eliminates the inner-table pointer indirection per iteration.
+-- Flat parallel arrays avoid inner-table pointer indirection per iteration.
 local CLASS_NAMES = {
     "Warrior", "Paladin", "Hunter", "Rogue", "Priest",
     "Shaman",  "Mage",    "Warlock", "Druid",
@@ -240,7 +277,6 @@ local CLASS_REPLS = {
 local numClasses = 9
 
 local function ProcessClassLine(text)
-    -- Called only when cfgClassColor is true and "Classes:" is present.
     local newText  = text
     local modified = false
     for i = 1, numClasses do
@@ -257,30 +293,26 @@ end
 -- ============================================================
 
 local tooltipDirty = {}
-
--- Line-frame cache: lineCache[tooltip] = { left={}, right={}, max=N, name="..." }
--- The tooltip name is stored here so tooltip:GetName() is only ever called
--- once per tooltip frame instead of once per ProcessTooltipLines call.
 local lineCache = {}
 
-local function ProcessTooltipLines(tooltip)
+local function ProcessTooltipLines(tooltip, skipElement)
+    if not cfgElementColor and not cfgClassColor then return end
+
     local numLines = tooltip:NumLines()
     if numLines == 0 then return end
-
-    -- Short-circuit: nothing to do if both text features are disabled.
-    if not cfgElementColor and not cfgClassColor then return end
 
     local cache = lineCache[tooltip]
     if not cache then
         local name = tooltip:GetName()
         if not name then return end
-        cache = { left = {}, right = {}, max = 0, name = name }
+        cache = { left = {}, right = {}, max = 0, lp = name .. "TextLeft", rp = name .. "TextRight" }
         lineCache[tooltip] = cache
     end
 
+    -- Extend the line-frame cache only when new lines have appeared.
     if numLines > cache.max then
-        local lp = cache.name .. "TextLeft"
-        local rp = cache.name .. "TextRight"
+        local lp = cache.lp
+        local rp = cache.rp
         for i = cache.max + 1, numLines do
             cache.left[i]  = getglobal(lp .. i)
             cache.right[i] = getglobal(rp .. i)
@@ -291,7 +323,7 @@ local function ProcessTooltipLines(tooltip)
     local left  = cache.left
     local right = cache.right
 
-    -- Line 1: class coloring only (never damage-color item/spell names).
+    -- Line 1: class coloring only (item name line never has element keywords).
     if cfgClassColor then
         local line1 = left[1]
         if line1 then
@@ -303,49 +335,30 @@ local function ProcessTooltipLines(tooltip)
         end
     end
 
-    -- Lines 2+: two code paths so the per-line classLineDone branch is
-    -- completely absent when class coloring is off.
-    if cfgClassColor then
-        local classLineDone = false
-        for i = 2, numLines do
-            local lineL = left[i]
-            if lineL then
-                local text = lineL:GetText()
-                if text then
-                    local newText = ProcessDamageLine(text)
-                    if not classLineDone and strfind(newText, "Classes:", 1, true) then
-                        local newText2, classModified = ProcessClassLine(newText)
-                        if classModified then
-                            classLineDone = true
-                            lineL:SetText(newText2)
-                        elseif newText ~= text then
-                            lineL:SetText(newText)
-                        end
+    -- Lines 2+: element coloring and (once) class coloring.
+    local classLineDone = not cfgClassColor  -- skip class scan entirely if disabled
+    for i = 2, numLines do
+        local lineL = left[i]
+        if lineL then
+            local text = lineL:GetText()
+            if text then
+                if strfind(text, " Mobs:", 1, true) then break end
+                local newText = skipElement and text or ProcessDamageLine(text)
+                if not classLineDone and strfind(newText, "Classes:", 1, true) then
+                    local newText2, classModified = ProcessClassLine(newText)
+                    if classModified then
+                        classLineDone = true
+                        lineL:SetText(newText2)
                     elseif newText ~= text then
                         lineL:SetText(newText)
                     end
-                end
-            end
-            local lineR = right[i]
-            if lineR then
-                local text = lineR:GetText()
-                if text then
-                    local newText = ProcessDamageLine(text)
-                    if newText ~= text then lineR:SetText(newText) end
+                elseif newText ~= text then
+                    lineL:SetText(newText)
                 end
             end
         end
-    else
-        -- Class coloring off: tighter loop, no class-line tracking overhead.
-        for i = 2, numLines do
-            local lineL = left[i]
-            if lineL then
-                local text = lineL:GetText()
-                if text then
-                    local newText = ProcessDamageLine(text)
-                    if newText ~= text then lineL:SetText(newText) end
-                end
-            end
+        -- Right-side lines never carry class info; element-color only.
+        if not skipElement and cfgElementColor then
             local lineR = right[i]
             if lineR then
                 local text = lineR:GetText()
@@ -359,7 +372,7 @@ local function ProcessTooltipLines(tooltip)
 end
 
 -- ============================================================
--- § 4  TrueColors — rarity border coloring
+-- § 4  Rarity border coloring
 -- ============================================================
 
 local QC = {
@@ -372,10 +385,11 @@ local QC = {
          0.90, 0.80, 0.50,  -- 6 Artifact
 }
 
--- Single pattern captures the numeric item ID from both bare "item:N:..."
--- strings and full "|Hitem:N:...|h..." hyperlinks in one strfind call.
 local ITEM_ID_CAPTURE = "item:(%d+)"
 local ITEM_PREFIX     = "item:"
+
+-- Pre-built item-info query string avoids per-call concatenation on cache miss.
+local ITEM_QUERY_FMT = "item:%d:0:0:0"
 
 local qualityCache = {}
 
@@ -385,10 +399,16 @@ local function QualityFromLink(link)
     local idNum = tonumber(idStr)
     local cached = qualityCache[idNum]
     if cached ~= nil then return cached end
-    local _, _, quality = GetItemInfo("item:" .. idNum .. ":0:0:0")
+    local _, _, quality = GetItemInfo(string.format(ITEM_QUERY_FMT, idNum))
     if quality then qualityCache[idNum] = quality end
     return quality
 end
+
+-- Forward declaration: ApplyBorderColor is referenced by the retryFrame OnUpdate
+-- closure below, but its body depends on SetBorderColor which follows. Declaring
+-- the local here lets the closure capture the upvalue slot; the body is assigned
+-- after SetBorderColor is defined.
+local ApplyBorderColor
 
 local RETRY_TIMEOUT = 5
 local queue  = {}
@@ -453,24 +473,13 @@ local function CancelRetryForTooltip(tooltip)
     end
 end
 
--- pfUI compatibility: pfUI replaces the visible tooltip border with a child
--- frame stored at tooltip.backdrop.  When that child frame exists we must call
--- SetBackdropBorderColor on it instead of (or in addition to) the parent
--- tooltip frame, because pfUI hides the original Blizzard border textures and
--- only the child frame's border is actually visible.
---
--- pfBackdrop[tooltip] caches the result of the backdrop probe so we pay the
--- type() cost only once per tooltip frame rather than on every border update.
--- nil  = not yet probed
--- false = probed, no pfUI backdrop present
--- <frame> = the backdrop child frame to also color
 local pfBackdrop = {}
 
 local function SetBorderColor(tooltip, r, g, b, a)
     tooltip:SetBackdropBorderColor(r, g, b, a)
     local bd = pfBackdrop[tooltip]
     if bd == nil then
-        -- First call for this tooltip: probe once and cache the result.
+        -- pfUI stores its visible border as a child frame at tooltip.backdrop.
         local candidate = tooltip.backdrop
         if candidate and type(candidate) == "table"
         and type(candidate.SetBackdropBorderColor) == "function" then
@@ -483,7 +492,7 @@ local function SetBorderColor(tooltip, r, g, b, a)
     if bd then bd:SetBackdropBorderColor(r, g, b, a) end
 end
 
-local function ApplyBorderColor(tooltip, quality)
+ApplyBorderColor = function(tooltip, quality)
     local b = quality * 3
     SetBorderColor(tooltip, QC[b], QC[b+1], QC[b+2], 1)
 end
@@ -493,7 +502,7 @@ local function ResetBorderColor(tooltip)
 end
 
 local tooltipActiveLink   = {}
-local tooltipPendingRetry = {}  -- set when EnqueueRetry was called, cleared on resolution
+local tooltipPendingRetry = {}
 
 local function ColorFromLink(tooltip, link)
     if not cfgBorders then
@@ -515,20 +524,16 @@ local function ColorFromLink(tooltip, link)
     end
 end
 
--- ── aux auction listing compatibility ────────────────────────────────────────
+-- rgbToQuality: reverse map from quality name-text color → quality index.
+-- Used by applyFromLineColor for tooltips that have no item link (e.g. action bar items, aux listings).
 
 local function rgbKey(r, g, b)
-    return floor(r * 100 + 0.5) * 10000
-         + floor(g * 100 + 0.5) * 100
-         + floor(b * 100 + 0.5)
+    return floor(r * 1000 + 0.5) * 1000000
+         + floor(g * 1000 + 0.5) * 1000
+         + floor(b * 1000 + 0.5)
 end
 
 local rgbToQuality = {}
--- Build the reverse map from the engine's own quality colors via
--- GetItemQualityColor(), which returns the exact same float values that the
--- engine uses to color item name text.  Using QC here would be wrong because
--- QC holds the border colors we choose, which are only approximately equal to
--- the item name colors.  Any mismatch causes rgbToQuality lookups to miss.
 if GetItemQualityColor then
     for q = 0, 6 do
         local r, g, b = GetItemQualityColor(q)
@@ -537,19 +542,15 @@ if GetItemQualityColor then
         end
     end
 else
-    -- Fallback: seed from QC (same as before) if the API is somehow absent.
     for q = 0, 6 do
         local b = q * 3
         rgbToQuality[rgbKey(QC[b], QC[b+1], QC[b+2])] = q
     end
 end
 
--- Use lineCache frame refs; falls back to getglobal only before cache is built.
 local function applyFromLineColor(frame, lineIndex)
     if not cfgBorders then return end
     if not tooltipActiveLink[frame] then
-        -- Use cached frame reference when available; fall back to getglobal
-        -- only if cache hasn't been built yet (e.g. Show fires before any Set*).
         local lineFrame
         local cache = lineCache[frame]
         if cache and cache.left[lineIndex] then
@@ -571,6 +572,24 @@ end
 -- § 5  Tooltip hooking — combined
 -- ============================================================
 
+local ELEMENT_SKIP_STRINGS = {}
+local ELEMENT_SKIP_COUNT   = 0
+do
+    for id in pairs(ITEM_ELEMENT_SKIP) do
+        ELEMENT_SKIP_COUNT = ELEMENT_SKIP_COUNT + 1
+        ELEMENT_SKIP_STRINGS[ELEMENT_SKIP_COUNT] = "item:" .. id .. ":"
+    end
+end
+ITEM_ELEMENT_SKIP = nil
+
+local function IsElementSkipLink(link)
+    if not link then return false end
+    for i = 1, ELEMENT_SKIP_COUNT do
+        if strfind(link, ELEMENT_SKIP_STRINGS[i], 1, true) then return true end
+    end
+    return false
+end
+
 local hookedTooltips = {}
 
 local function WrapSetInventoryItem(tooltip)
@@ -578,10 +597,10 @@ local function WrapSetInventoryItem(tooltip)
     local orig = tooltip.SetInventoryItem
     tooltip.SetInventoryItem = function(self, unit, slot)
         local hasItem, hasCooldown, repairCost = orig(self, unit, slot)
+        local link = GetInventoryItemLink(unit, slot)
         tooltipActiveLink[self] = nil
         if cfgBorders then
             if hasItem then
-                local link = GetInventoryItemLink(unit, slot)
                 if link then
                     ColorFromLink(self, link)
                 else
@@ -593,7 +612,7 @@ local function WrapSetInventoryItem(tooltip)
             end
         end
         tooltipDirty[self] = nil
-        ProcessTooltipLines(self)
+        ProcessTooltipLines(self, IsElementSkipLink(link))
         return hasItem, hasCooldown, repairCost
     end
 end
@@ -605,9 +624,7 @@ local function HookTooltip(tooltip)
 
     local origSHL = tooltip.SetHyperlink
     tooltip.SetHyperlink = function(self, link)
-        -- Use pcall so server-generated link types the client doesn't recognise
-        -- (e.g. spell links from cmangos .lookup spell) don't surface as Lua
-        -- errors.  If the client rejects the link we still bail cleanly.
+        -- pcall guards against unrecognised link types (e.g. cmangos spell links).
         local ok = pcall(origSHL, self, link)
         if not ok then return end
         if link and strfind(link, ITEM_PREFIX, 1, true) then
@@ -618,7 +635,7 @@ local function HookTooltip(tooltip)
             if cfgBorders then ResetBorderColor(self) end
         end
         tooltipDirty[self] = nil
-        ProcessTooltipLines(self)
+        ProcessTooltipLines(self, IsElementSkipLink(link))
     end
 
     local origShow = tooltip.Show
@@ -637,7 +654,9 @@ local function HookTooltip(tooltip)
             end
             if tooltipDirty[self] then
                 tooltipDirty[self] = nil
-                ProcessTooltipLines(self)
+                if not UnitName("mouseover") then
+                    ProcessTooltipLines(self, IsElementSkipLink(tooltipActiveLink[self]))
+                end
             end
         end
     end
@@ -664,8 +683,8 @@ local function HookAddonTooltipMethods(tooltip)
         tooltip.SetBagItem = function(self, bag, slot)
             orig(self, bag, slot)
             tooltipActiveLink[self] = nil
+            local link = GetContainerItemLink(bag, slot)
             if cfgBorders then
-                local link = GetContainerItemLink(bag, slot)
                 if link then
                     ColorFromLink(self, link)
                 else
@@ -674,7 +693,7 @@ local function HookAddonTooltipMethods(tooltip)
                 end
             end
             tooltipDirty[self] = nil
-        ProcessTooltipLines(self)
+            ProcessTooltipLines(self, IsElementSkipLink(link))
         end
     end
 
@@ -683,9 +702,10 @@ local function HookAddonTooltipMethods(tooltip)
         tooltip.SetLootItem = function(self, index)
             orig(self, index)
             tooltipActiveLink[self] = nil
-            ColorFromLink(self, GetLootSlotLink(index))
+            local link = GetLootSlotLink(index)
+            ColorFromLink(self, link)
             tooltipDirty[self] = nil
-        ProcessTooltipLines(self)
+            ProcessTooltipLines(self, IsElementSkipLink(link))
         end
     end
 end
@@ -697,17 +717,31 @@ end
 local GT = GameTooltip
 HookTooltip(GT)
 
+-- Track tooltips currently showing a unit via SetUnit (party/raid frames etc.).
+-- These must not have element coloring applied since pfUI/ShaguTweaks append the
+-- ToT name as an extra line, which could match element keywords.
+local tooltipIsUnit = {}
+
+do
+    local origSetUnit = GT.SetUnit
+    if origSetUnit then
+        GT.SetUnit = function(self, unit)
+            tooltipIsUnit[self] = true
+            origSetUnit(self, unit)
+        end
+    end
+end
+
 do
     local prevShow = GT.Show
     GT.Show = function(self)
-        -- Process lines BEFORE showing, exactly as the original Chroma addon did.
-        -- This covers tooltips built via AddLine/AddDoubleLine (e.g. aux auction
-        -- listings) where no Set* hook fires and tooltipDirty is never set.
-        -- The dirty flag is cleared first so the inner Show wrapper's FlushDirty
-        -- check does not redundantly re-process lines that we just handled.
-        tooltipDirty[self] = nil
-        ProcessTooltipLines(self)
-        applyFromLineColor(self, 1)
+        if not UnitName("mouseover") then
+            tooltipDirty[self] = nil
+            local skipElem = tooltipIsUnit[self] or IsElementSkipLink(tooltipActiveLink[self])
+            tooltipIsUnit[self] = nil
+            ProcessTooltipLines(self, skipElem)
+            applyFromLineColor(self, 1)
+        end
         prevShow(self)
     end
 end
@@ -716,9 +750,9 @@ do
     local orig = GT.SetBagItem
     GT.SetBagItem = function(self, bag, slot)
         orig(self, bag, slot)
-        tooltipActiveLink[self] = nil
+        local link = GetContainerItemLink(bag, slot)
+        tooltipActiveLink[self] = link
         if cfgBorders then
-            local link = GetContainerItemLink(bag, slot)
             if link then
                 ColorFromLink(self, link)
             else
@@ -727,7 +761,7 @@ do
             end
         end
         tooltipDirty[self] = nil
-        ProcessTooltipLines(self)
+        ProcessTooltipLines(self, IsElementSkipLink(link))
     end
 end
 
@@ -736,9 +770,10 @@ do
     GT.SetMerchantItem = function(self, index)
         orig(self, index)
         tooltipActiveLink[self] = nil
-        ColorFromLink(self, GetMerchantItemLink(index))
+        local link = GetMerchantItemLink(index)
+        ColorFromLink(self, link)
         tooltipDirty[self] = nil
-        ProcessTooltipLines(self)
+        ProcessTooltipLines(self, IsElementSkipLink(link))
     end
 end
 
@@ -747,9 +782,10 @@ do
     GT.SetLootItem = function(self, index)
         orig(self, index)
         tooltipActiveLink[self] = nil
-        ColorFromLink(self, GetLootSlotLink(index))
+        local link = GetLootSlotLink(index)
+        ColorFromLink(self, link)
         tooltipDirty[self] = nil
-        ProcessTooltipLines(self)
+        ProcessTooltipLines(self, IsElementSkipLink(link))
     end
 end
 
@@ -758,9 +794,10 @@ do
     GT.SetQuestItem = function(self, qtype, index)
         orig(self, qtype, index)
         tooltipActiveLink[self] = nil
-        ColorFromLink(self, GetQuestItemLink(qtype, index))
+        local link = GetQuestItemLink(qtype, index)
+        ColorFromLink(self, link)
         tooltipDirty[self] = nil
-        ProcessTooltipLines(self)
+        ProcessTooltipLines(self, IsElementSkipLink(link))
     end
 end
 
@@ -769,9 +806,10 @@ do
     GT.SetQuestLogItem = function(self, qtype, index)
         orig(self, qtype, index)
         tooltipActiveLink[self] = nil
-        ColorFromLink(self, GetQuestLogItemLink(qtype, index))
+        local link = GetQuestLogItemLink(qtype, index)
+        ColorFromLink(self, link)
         tooltipDirty[self] = nil
-        ProcessTooltipLines(self)
+        ProcessTooltipLines(self, IsElementSkipLink(link))
     end
 end
 
@@ -780,9 +818,10 @@ do
     GT.SetAuctionItem = function(self, atype, index)
         orig(self, atype, index)
         tooltipActiveLink[self] = nil
-        ColorFromLink(self, GetAuctionItemLink(atype, index))
+        local link = GetAuctionItemLink(atype, index)
+        ColorFromLink(self, link)
         tooltipDirty[self] = nil
-        ProcessTooltipLines(self)
+        ProcessTooltipLines(self, IsElementSkipLink(link))
     end
 end
 
@@ -810,7 +849,7 @@ do
              or GetTradeSkillItemLink(index)
         ColorFromLink(self, link)
         tooltipDirty[self] = nil
-        ProcessTooltipLines(self)
+        ProcessTooltipLines(self, IsElementSkipLink(link))
     end
 end
 
@@ -824,7 +863,7 @@ do
              or GetCraftItemLink(index)
         ColorFromLink(self, link)
         tooltipDirty[self] = nil
-        ProcessTooltipLines(self)
+        ProcessTooltipLines(self, IsElementSkipLink(link))
     end
 end
 
@@ -833,13 +872,14 @@ do
     GT.SetInboxItem = function(self, mailIndex, attachIndex)
         orig(self, mailIndex, attachIndex)
         tooltipActiveLink[self] = nil
-        if GetInboxItemLink then
-            ColorFromLink(self, GetInboxItemLink(mailIndex, attachIndex))
+        local link = GetInboxItemLink and GetInboxItemLink(mailIndex, attachIndex)
+        if link then
+            ColorFromLink(self, link)
         else
             ResetBorderColor(self)
         end
         tooltipDirty[self] = nil
-        ProcessTooltipLines(self)
+        ProcessTooltipLines(self, IsElementSkipLink(link))
     end
 end
 
@@ -854,7 +894,7 @@ do
                 if quality then ApplyBorderColor(self, quality) else ResetBorderColor(self) end
             end
             tooltipDirty[self] = nil
-        ProcessTooltipLines(self)
+            ProcessTooltipLines(self)
         end
     end
 end
@@ -865,35 +905,24 @@ do
     GT.SetTradePlayerItem = function(self, index)
         origPlayer(self, index)
         tooltipActiveLink[self] = nil
-        ColorFromLink(self, GetTradePlayerItemLink(index))
+        local link = GetTradePlayerItemLink(index)
+        ColorFromLink(self, link)
         tooltipDirty[self] = nil
-        ProcessTooltipLines(self)
+        ProcessTooltipLines(self, IsElementSkipLink(link))
     end
     GT.SetTradeTargetItem = function(self, index)
         origTarget(self, index)
         tooltipActiveLink[self] = nil
-        ColorFromLink(self, GetTradeTargetItemLink(index))
+        local link = GetTradeTargetItemLink(index)
+        ColorFromLink(self, link)
         tooltipDirty[self] = nil
-        ProcessTooltipLines(self)
+        ProcessTooltipLines(self, IsElementSkipLink(link))
     end
 end
 
--- Spell / action / buff hooks (line processing only, no border color).
--- These call ProcessTooltipLines DIRECTLY after orig(), not via the dirty flag.
---
--- Why: In 1.12.1, the C implementation of SetSpell, SetAction, SetPlayerBuff
--- etc. calls GameTooltip:Show() internally at the C level, which bypasses our
--- Lua Show wrapper entirely.  The dirty-flag system relies on our Lua Show
--- wrapper to flush the flag, so it never fires for these methods.  The UI also
--- does not call Show() explicitly from Lua after these Set* calls (unlike item
--- tooltips where OnEnter explicitly calls Show), so the flag would sit
--- unconsumed forever.
---
--- The original Chroma addon solved this by calling ColorizeDamageTypes()
--- synchronously after every hooked method, with no deferred flush.  We do the
--- same here: after orig() returns the lines are populated and readable, so we
--- process them immediately.  The dirty flag is explicitly cleared so a
--- redundant Show (if one does fire) does not re-process.
+-- Spell/action/buff hooks: ProcessTooltipLines is called directly (not via the
+-- dirty flag) because these Set* methods call Show internally at the C level,
+-- bypassing our Lua Show wrapper.
 do
     local function HookLineOnly(tooltip, methodName)
         local orig = tooltip[methodName]
@@ -907,10 +936,7 @@ do
 
     HookLineOnly(GT, "SetSpell")
 
-    -- SetAction needs border coloring too: action bar item tooltips have no item
-    -- link available, so we infer quality from the name text color on line 1
-    -- (the same fallback applyFromLineColor uses).  We must clear tooltipActiveLink
-    -- first so applyFromLineColor's guard doesn't skip the lookup.
+    -- SetAction: no item link available, infer quality from name text color.
     do
         local origSetAction = GT.SetAction
         if origSetAction then
@@ -949,31 +975,19 @@ end
 -- § 7  Dynamic tooltip detection
 -- ============================================================
 
-local KNOWN_ADDON_TOOLTIPS = {
-    "AtlasLootTooltip", "AtlasLootTooltip1", "AtlasLootTooltip2",
-    "TmogTooltip", "TmogDressupTooltip",
-    "ShoppingTooltip1", "ShoppingTooltip2",
-    "ItemRefTooltip",
-    "GameTooltip",
-}
-
-local function ScanForTooltips()
-    for _, name in ipairs(KNOWN_ADDON_TOOLTIPS) do
-        local obj = getglobal(name)
-        if obj
-        and type(obj) == "table"
-        and type(obj.SetHyperlink)           == "function"
-        and type(obj.SetBackdropBorderColor) == "function" then
-            HookTooltip(obj)
-        end
-    end
-end
-
+-- CreateFrame override: hook any GameTooltip-type frame created at runtime
+-- (e.g. by addon frameworks that create their own tooltip frames).
 CreateFrame = function(frameType, name, parent, template)
     local frame = origCreateFrame(frameType, name, parent, template)
     if frameType == "GameTooltip" then HookTooltip(frame) end
     return frame
 end
+
+-- ============================================================
+-- § C  Addon compatibility
+-- ============================================================
+
+-- ── AtlasLoot ────────────────────────────────────────────────────────────────
 
 local function HookAtlasLoot()
     HookAddonTooltipMethods(getglobal("AtlasLootTooltip"))
@@ -981,16 +995,63 @@ local function HookAtlasLoot()
     HookAddonTooltipMethods(getglobal("AtlasLootTooltip2"))
 end
 
+-- ── Tmog ─────────────────────────────────────────────────────────────────────
+
 local function HookTmog()
     HookAddonTooltipMethods(getglobal("TmogTooltip"))
     HookAddonTooltipMethods(getglobal("TmogDressupTooltip"))
 end
 
-HookAtlasLoot()
-HookTmog()
+-- ── aux / ShoppingTooltip ────────────────────────────────────────────────────
+-- WrapShoppingShow is applied unconditionally in VARIABLES_LOADED to both
+-- ShoppingTooltip frames.  This ensures ProcessTooltipLines fires even when no
+-- Set* hook set the dirty flag (e.g. aux auction listings call Show directly).
+
+local function WrapShoppingShow(tt)
+    if not tt or not tt.Show then return end
+    local origST = tt.Show
+    tt.Show = function(self)
+        tooltipDirty[self] = nil
+        ProcessTooltipLines(self, IsElementSkipLink(tooltipActiveLink[self]))
+        applyFromLineColor(self, 2)
+        origST(self)
+    end
+end
+
+-- ── AdvancedTradeSkillWindow2 ─────────────────────────────────────────────────
+
+local function HookATSW()
+    -- ATSWRecipeTooltip is a custom dynamic tooltip; HookAddonTooltipMethods
+    -- covers SetHyperlink, SetBagItem, SetLootItem, and Show.
+    HookAddonTooltipMethods(getglobal("ATSWRecipeTooltip"))
+
+    -- ATSWRecipeItemTooltip is a standard GameTooltip used to show craft/tradeskill
+    -- item details. SetTradeSkillItem and SetCraftSpell populate it; hook both so
+    -- ProcessTooltipLines fires immediately after the tooltip content is set.
+    local tt = getglobal("ATSWRecipeItemTooltip")
+    HookAddonTooltipMethods(tt)
+    if tt then
+        if tt.SetTradeSkillItem then
+            local orig = tt.SetTradeSkillItem
+            tt.SetTradeSkillItem = function(self, index, reagent)
+                orig(self, index, reagent)
+                tooltipDirty[self] = nil
+                ProcessTooltipLines(self)
+            end
+        end
+        if tt.SetCraftSpell then
+            local orig = tt.SetCraftSpell
+            tt.SetCraftSpell = function(self, index)
+                orig(self, index)
+                tooltipDirty[self] = nil
+                ProcessTooltipLines(self)
+            end
+        end
+    end
+end
 
 -- ============================================================
--- § 8  VARIABLES_LOADED + aux ShoppingTooltip hooks
+-- § 8  VARIABLES_LOADED
 -- ============================================================
 
 do
@@ -999,42 +1060,25 @@ do
     varFrame:SetScript("OnEvent", function()
         if event ~= "VARIABLES_LOADED" then return end
 
-        -- SavedVariables are now available.  Ensure ChromaticConfig exists and
-        -- fill in any keys that are missing (e.g. first login, or new keys added
-        -- in an update).  Existing saved values are preserved as-is.
-        if not ChromaticConfig then
-            ChromaticConfig = {}
-        end
+        if not ChromaticConfig then ChromaticConfig = {} end
         local cfg = ChromaticConfig
         if cfg.borders      == nil then cfg.borders      = true end
         if cfg.classcolor   == nil then cfg.classcolor   = true end
         if cfg.elementcolor == nil then cfg.elementcolor = true end
         RefreshConfig()
 
-        ScanForTooltips()
-        WrapSetInventoryItem(getglobal("ShoppingTooltip1"))
-        WrapSetInventoryItem(getglobal("ShoppingTooltip2"))
+        local st1 = getglobal("ShoppingTooltip1")
+        local st2 = getglobal("ShoppingTooltip2")
+        HookTooltip(st1)
+        HookTooltip(st2)
+        WrapSetInventoryItem(st1)
+        WrapSetInventoryItem(st2)
+        WrapShoppingShow(st1)
+        WrapShoppingShow(st2)
 
-        do
-            local function WrapShoppingShow(tt)
-                if tt and tt.Show then
-                    local origST = tt.Show
-                    tt.Show = function(self)
-                        -- Process lines before showing (no dirty-flag guard) so
-                        -- text coloring fires even when no Set* hook set the flag
-                        -- (e.g. SetMerchantItem on the compare tooltip).  Clear
-                        -- the flag first so the inner HookTooltip Show wrapper
-                        -- does not redundantly re-process the same lines.
-                        tooltipDirty[self] = nil
-                        ProcessTooltipLines(self)
-                        applyFromLineColor(self, 2)
-                        origST(self)
-                    end
-                end
-            end
-            WrapShoppingShow(getglobal("ShoppingTooltip1"))
-            WrapShoppingShow(getglobal("ShoppingTooltip2"))
-        end
+        if IsAddOnLoaded("AtlasLoot")               then HookAtlasLoot() end
+        if IsAddOnLoaded("Tmog")                     then HookTmog()      end
+        if IsAddOnLoaded("AdvancedTradeSkillWindow2") then HookATSW()      end
 
         varFrame:UnregisterEvent("VARIABLES_LOADED")
     end)
@@ -1050,8 +1094,9 @@ do
     addonFrame:SetScript("OnEvent", function()
         if event ~= "ADDON_LOADED" then return end
         local name = arg1
-        if strfind(name, "AtlasLoot", 1, true) then HookAtlasLoot() end
-        if name == "Tmog" then HookTmog() end
+        if strfind(name, "AtlasLoot", 1, true)          then HookAtlasLoot() end
+        if name == "Tmog"                               then HookTmog()      end
+        if name == "AdvancedTradeSkillWindow2"           then HookATSW()      end
     end)
 end
 
