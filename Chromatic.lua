@@ -76,10 +76,10 @@ local DAMAGE_COLORS = {
 
 local EXCEPTIONS = {
 "Arcane Intellect", "Arcane Brilliance", "Arcane Explosion", "Arcane Missiles", "Arcane Instability", "Arcane Talents", "Arcane Resilience", "Arcane Shot", "Arcane Detonation", "Arcane Protection", "Arcane Crystal", "Arcane Elixir", "Arcane Powder", "Arcane Bomb", 
-"Fire Talents", "Fire Ward", "Fire Shield", "Fire Blast", "Inner Fire", "Faerie Fire", "Fire Totem", "Fire Nova", "Fire Resistance Totem", "fire every", "Fire trap", "Rapid Fire", "Fire Oil", "Elemental Fire", "Essence of Fire", "Heart of Fire", "of Fire", "Fire Protection", 
+"Fire Talents", "Fire Ward", "Fire Shield", "Fire Blast", "Inner Fire", "Faerie Fire", "Fire Totem", "Fire Nova", "Fire Resistance Totem", "fire every", "Fire trap", "Rapid Fire", "Fire Oil", "Elemental Fire", "Essence of Fire", "Heart of Fire", "of Fire", "Fire Protection", "Fire Goggles", 
 "Frost Talents", "Frost Nova", "Frost Armor", "Frost Shock", "Frost Trap", "Frost trap", "frost trap", "Frost Resistance Totem", "of Frost", "Frost Protection", "Frost Oil", "Frost Tiger", 
-"Shadow Talents", "Shadow Flame", "Shadow Bolt", "Shadow Word", "Shadow energy", "Shadow Trance", "Shadow Oil", "Shadow Silk", "Zandalarian Shadow", "of Shadow", "Shadow Protection", "Shadow Crescent", "Shadow Hood", "Shadow Goggles", "Flash Shadow", 
-"Holy Talents", "Holy Shield", "Holy Shock", "Holy Light", "Holy Fire", "Holy Power", "Holy Candle", 
+"Shadow Talents", "Shadow Flame", "Shadow Bolt", "Shadow Word", "Shadow energy", "Shadow Trance", "Shadow Oil", "Shadow Silk", "Zandalarian Shadow", "of Shadow", "Shadow Protection", "Shadow Crescent", "Shadow Hood", "Shadow Goggles", "Flash Shadow", "Shadow Shot", 
+"Holy Talents", "Holy Shield", "holy shield", "Holy Shock", "Holy Light", "Holy Fire", "Holy Power", "Holy Candle", 
 "Nature's Guard", "Nature's Grace", "of nature", "of Nature", "Nature Protection", 
 }
 local numExceptions = table.getn(EXCEPTIONS)
