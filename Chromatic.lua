@@ -404,6 +404,8 @@ local function QualityFromLink(link)
     return quality
 end
 
+
+
 -- Forward declaration: ApplyBorderColor is referenced by the retryFrame OnUpdate
 -- closure below, but its body depends on SetBorderColor which follows. Declaring
 -- the local here lets the closure capture the upvalue slot; the body is assigned
@@ -778,6 +780,19 @@ do
 end
 
 do
+    local orig = GT.SetBuybackItem
+    if orig then
+        GT.SetBuybackItem = function(self, index)
+            orig(self, index)
+            tooltipActiveLink[self] = nil
+            tooltipDirty[self] = nil
+            ProcessTooltipLines(self)
+            applyFromLineColor(self, 1)
+        end
+    end
+end
+
+do
     local orig = GT.SetLootItem
     GT.SetLootItem = function(self, index)
         orig(self, index)
@@ -958,7 +973,7 @@ do
     HookLineOnly(GT, "SetShapeshift")
     HookLineOnly(GT, "SetPetAction")
 
-    HookLineOnly(ItemRefTooltip, "SetHyperlink")
+    HookTooltip(ItemRefTooltip)
 end
 
 do
