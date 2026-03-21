@@ -30,6 +30,8 @@ Chromatic detects and color codes tooltips from the following addons:
 
 **AtlasLoot**
 
+**AtlasQuest**
+
 **aux**
 
 **pfUI**
