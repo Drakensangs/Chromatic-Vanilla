@@ -1017,6 +1017,12 @@ local function HookTmog()
     HookAddonTooltipMethods(getglobal("TmogDressupTooltip"))
 end
 
+-- ── AtlasQuest ───────────────────────────────────────────────────────────────
+
+local function HookAtlasQuest()
+    HookAddonTooltipMethods(getglobal("AtlasQuestTooltip"))
+end
+
 -- ── aux / ShoppingTooltip ────────────────────────────────────────────────────
 -- WrapShoppingShow is applied unconditionally in VARIABLES_LOADED to both
 -- ShoppingTooltip frames.  This ensures ProcessTooltipLines fires even when no
@@ -1091,9 +1097,10 @@ do
         WrapShoppingShow(st1)
         WrapShoppingShow(st2)
 
-        if IsAddOnLoaded("AtlasLoot")               then HookAtlasLoot() end
-        if IsAddOnLoaded("Tmog")                     then HookTmog()      end
-        if IsAddOnLoaded("AdvancedTradeSkillWindow2") then HookATSW()      end
+        if IsAddOnLoaded("AtlasLoot")               then HookAtlasLoot()   end
+        if IsAddOnLoaded("Tmog")                     then HookTmog()        end
+        if IsAddOnLoaded("AdvancedTradeSkillWindow2") then HookATSW()       end
+        if IsAddOnLoaded("AtlasQuest")               then HookAtlasQuest() end
 
         varFrame:UnregisterEvent("VARIABLES_LOADED")
     end)
@@ -1109,9 +1116,10 @@ do
     addonFrame:SetScript("OnEvent", function()
         if event ~= "ADDON_LOADED" then return end
         local name = arg1
-        if strfind(name, "AtlasLoot", 1, true)          then HookAtlasLoot() end
-        if name == "Tmog"                               then HookTmog()      end
-        if name == "AdvancedTradeSkillWindow2"           then HookATSW()      end
+        if strfind(name, "AtlasLoot", 1, true)          then HookAtlasLoot()   end
+        if name == "Tmog"                               then HookTmog()        end
+        if name == "AdvancedTradeSkillWindow2"           then HookATSW()       end
+        if name == "AtlasQuest"                         then HookAtlasQuest() end
     end)
 end
 
