@@ -1002,6 +1002,50 @@ end
 -- § C  Addon compatibility
 -- ============================================================
 
+-- ── Character screen resistances ─────────────────────────────────────────────
+-- PaperDollFrame_SetResistances() writes frame.tooltip as a plain string:
+--   resistanceName.." "..resistance
+-- It never calls a GameTooltip Set* method, so there is nothing to hook on
+-- the tooltip object itself. We hook the function and rewrite the .tooltip
+-- strings on MagicResFrame1-N immediately after Blizzard populates them.
+-- NUM_RESISTANCE_TYPES is defined in PaperDollFrame.lua as 5.
+local function HookCharacterResistances()
+    if not PaperDollFrame_SetResistances then return end
+    local origPDFSR = PaperDollFrame_SetResistances
+    PaperDollFrame_SetResistances = function()
+        origPDFSR()
+        if not cfgElementColor then return end
+        local n = NUM_RESISTANCE_TYPES or 5
+        for i = 1, n do
+            local frame = getglobal("MagicResFrame" .. i)
+            if frame and frame.tooltip then
+                frame.tooltip = ProcessDamageLine(frame.tooltip)
+            end
+        end
+    end
+end
+
+-- ── Pet screen resistances ────────────────────────────────────────────────────
+-- PetPaperDollFrame_SetResistances() writes frame.tooltip as just the bare
+-- resistance name: TEXT(getglobal("RESISTANCE"..id.."_NAME"))
+-- No value is appended in vanilla, unlike WotLK. Same hook pattern applies.
+-- NUM_PET_RESISTANCE_TYPES is defined in PetPaperDollFrame.lua as 5.
+local function HookPetResistances()
+    if not PetPaperDollFrame_SetResistances then return end
+    local origPPDFSR = PetPaperDollFrame_SetResistances
+    PetPaperDollFrame_SetResistances = function()
+        origPPDFSR()
+        if not cfgElementColor then return end
+        local n = NUM_PET_RESISTANCE_TYPES or 5
+        for i = 1, n do
+            local frame = getglobal("PetMagicResFrame" .. i)
+            if frame and frame.tooltip then
+                frame.tooltip = ProcessDamageLine(frame.tooltip)
+            end
+        end
+    end
+end
+
 -- ── AtlasLoot ────────────────────────────────────────────────────────────────
 
 local function HookAtlasLoot()
@@ -1096,6 +1140,9 @@ do
         WrapSetInventoryItem(st2)
         WrapShoppingShow(st1)
         WrapShoppingShow(st2)
+
+        HookCharacterResistances()
+        HookPetResistances()
 
         if IsAddOnLoaded("AtlasLoot")               then HookAtlasLoot()   end
         if IsAddOnLoaded("Tmog")                     then HookTmog()        end
