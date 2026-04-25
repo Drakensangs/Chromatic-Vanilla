@@ -80,7 +80,7 @@ local EXCEPTIONS = {
 "Frost Talents", "Frost Nova", "Frost Armor", "Frost Shock", "Frost Trap", "Frost trap", "frost trap", "Frost Resistance Totem", "of Frost", "of frost", "Frost Protection", "Frost Oil", "Frost Tiger", "Frost Arrow", "with frost", 
 "Shadow Talents", "Shadow Flame", "Shadow Bolt", "Shadow Word", "Shadow energy", "Shadow Trance", "Shadow Oil", "Shadow Silk", "Zandalarian Shadow", "of Shadow", "Shadow Protection", "Shadow Ward", "Shadow Crescent", "Shadow Hood", "Shadow Goggles", "Flash Shadow", "Shadow Shot", "Shadow Priest", 
 "Holy Talents", "holy spirit", "Holy energy", "Holy Shield", "holy shield", "Holy Shock", "Holy Light", "Holy Fire", "Holy Power", "Holy Candle", "Holy Mightstone", 
-"Nature's Guard", "Nature's Grace", "of nature", "of Nature", "Nature Protection", 
+"Nature's Guard", "Nature's Grace", "of nature", "of Nature", "Nature Protection", "Nature Resistance Totem", 
 }
 local numExceptions = table.getn(EXCEPTIONS)
 
