@@ -76,7 +76,7 @@ local DAMAGE_COLORS = {
 
 local EXCEPTIONS = {
 "Arcane Intellect", "Arcane Brilliance", "Arcane Explosion", "Arcane Missiles", "Arcane Instability", "Arcane Talents", "Arcane Resilience", "Arcane Shot", "Arcane Detonation", "Arcane Protection", "Arcane Crystal", "Arcane crystals", "Arcane Elixir", "Arcane Powder", "Arcane Bomb", "Arcane energy",
-"Fire Talents", "Fire Ward", "Fire Shield", "Fire Blast", "Inner Fire", "Faerie Fire", "Fire Totem", "Fire Nova", "Fire Resistance Totem", "fire every", "Fire trap", "Rapid Fire", "Fire Oil", "Elemental Fire", "Essence of Fire", "Heart of Fire", "of Fire", "Fire Protection", "Fire Goggles", "Keep away from fire.", "liquid fire", "ring of fire", "fire at enemies", "into Fire", "Fire into",   
+"Fire Talents", "Fire Ward", "Fire Shield", "Fire shield", "Fire Blast", "Inner Fire", "Faerie Fire", "Fire Totem", "Fire Nova", "Fire Resistance Totem", "fire every", "Fire trap", "fire trap", "Rapid Fire", "Fire Oil", "Elemental Fire", "Essence of Fire", "Heart of Fire", "of Fire", "Fire Protection", "Fire Goggles", "Keep away from fire.", "liquid fire", "ring of fire", "fire at enemies", "into Fire", "Fire into", "pillar of fire", "wind, fire,", "Fire Festival", "Fire Lord",
 "Frost Talents", "Frost Nova", "Frost Armor", "Frost Shock", "Frost Trap", "Frost trap", "frost trap", "Frost Resistance Totem", "of Frost", "of frost", "Frost Protection", "Frost Oil", "Frost Tiger", "Frost Arrow", "with frost", 
 "Shadow Talents", "Shadow Flame", "Shadow Bolt", "Shadow Word", "Shadow energy", "Shadow Trance", "Shadow Oil", "Shadow Silk", "Zandalarian Shadow", "of Shadow", "Shadow Protection", "Shadow Ward", "Shadow Crescent", "Shadow Hood", "Shadow Goggles", "Flash Shadow", "Shadow Shot", "Shadow Priest", "text shadow", 
 "Holy Talents", "holy spirit", "Holy energy", "Holy Shield", "holy shield", "Holy Shock", "Holy Light", "Holy Fire", "Holy Power", "Holy Candle", "Holy Mightstone", 
@@ -496,6 +496,9 @@ end
 
 ApplyBorderColor = function(tooltip, quality)
     local b = quality * 3
+    -- Guard against invalid qualities (e.g. -1): QC lookups would return nil,
+    -- which SetBackdropBorderColor treats as 0 and paints the border black.
+    if quality < 0 or QC[b] == nil then return end
     SetBorderColor(tooltip, QC[b], QC[b+1], QC[b+2], 1)
 end
 
@@ -847,7 +850,11 @@ do
         tooltipActiveLink[self] = nil
         if cfgBorders then
             local _, _, _, quality = GetAuctionSellItemInfo()
-            if quality then ApplyBorderColor(self, quality) else ResetBorderColor(self) end
+            if quality and quality >= 0 then
+                ApplyBorderColor(self, quality)
+            else
+                applyFromLineColor(self, 1)
+            end
         end
         tooltipDirty[self] = nil
         ProcessTooltipLines(self)
