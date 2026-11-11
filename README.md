@@ -1,48 +1,20 @@
 # 🎨 **Chromatic** (Vanilla 1.12.1)
 
-A lightweight addon that color codes elemental damage/resistances in item & spell tooltips, color codes item tooltip borders based on rarity, and class names in item tooltips.
+> [!IMPORTANT]
+> **Chromatic** requires [**ClassicAPI**](https://github.com/brues-code/ClassicAPI) in order to function.
 
-# ✨ **Features**
+Chromatic is a lightweight addon that color codes various elements of the UI and tooltips with the following features:
 
-**Item tooltip class name colors.** Class restriction lines (for example `Class: Warrior`) on item tooltips have each class name colored in its official class color.
+ - toggleable color coded item rarity borders
+ - toggleable color coded class names in item tooltips
+ - toggleable color coded damage types & resistances (arcane, fire, frost etc) on items tooltips, trainer interface, paperdoll etc
+ - advanced options menu tab where individual rarity types, class names & elements can be turned on or off and have their colors overridden
 
-**Item tooltip rarity borders.** Borders are colored based on the item's rarity.
+Regarding compatibility, the addon will apply its color coding features on tooltips from the following addons: [**AdvancedTradeSkillWindow2**](https://github.com/Shellyoung/AdvancedTradeSkillWindow2), [**Atlas, AtlasLoot & AtlasQuest**](https://warperia.com/addon-vanilla/atlasloot-enhanced/), [**aux**](https://github.com/OldManAlpha/aux-addon), [**pfUI**](https://github.com/brues-code/pfUI), [**ShaguTweaks**](https://github.com/shagu/ShaguTweaks), [**Tmog**](https://github.com/Otari98/Tmog). Chromatic also has exceptions for several other addons so that it doesn't erroneously color code their tooltips
 
-**Color coded damage/resistance type.** Tooltip lines containing damage/resistance types are colored automatically. Fire, Frost, Arcane, Holy, Nature, and Shadow each get color coded.
+## Known Issues
 
-# ⚙️ **Slash Commands**
-
-Type  `/chromatic` or `/chrc` and one of these commands:
-
-`class`   - toggle item tooltip class name color coding
-
-`border`  - toggle color coded item tooltip borders
-
-`element` - toggle damage/resistance type color coding
-
-`status`  - show current addon settings
-
-# 🔌 **Addon Compatibility**
-
-Chromatic detects and color codes tooltips from the following addons:
-
-**AdvancedTradeSkillWindow2**
-
-**AtlasLoot**
-
-**AtlasQuest**
-
-**aux**
-
-**pfUI**
-
-**ShaguTweaks**
-
-**Tmog**
-
-# **⚠️ Known Issues**
-
-Element color coding is not context-aware — any occurrence of Fire, Frost, Arcane, Holy, Nature, or Shadow in a tooltip will be colorized, including spell names, item names, and even mob names. An exception list exists in `Chromatic.lua` (search for `local EXCEPTIONS`) but is not exhaustive. If you encounter a false match, add the offending name to that list.
+The addon will apply its damage type & resistance color coding to anything that matches Arcane, Fire, Frost, Holy etc. There is an exceptions file to avoid the addon color coding the wrong things, however. I was pretty strict with what phrases should be excluded from being color coded and if you think it's too much or that some items should have their tooltips color coded, you can easily edit the `Exceptions.lua` file.
 
 # 👨‍💻 **Author**
 Drakensangs
@@ -55,3 +27,4 @@ Drakensangs
 <img width="403" height="79" alt="Untitled6" src="https://github.com/user-attachments/assets/e7d98f4c-43e2-4d84-bd3b-3ec0b4813cf2" />\
 <img width="400" height="752" alt="Untitled" src="https://github.com/user-attachments/assets/316332a9-956b-4c29-ae45-444c98f6e204" />\
 <img width="542" height="397" alt="Untitled5" src="https://github.com/user-attachments/assets/d7a421bd-b0d4-479b-afe0-9dc5ef7a1ce1" />
+<img width="1035" height="913" alt="chromaticoptions" src="https://github.com/user-attachments/assets/57ec579e-5811-4de0-ae0f-9ba2458acd67" />
