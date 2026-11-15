@@ -1429,8 +1429,8 @@ if InterfaceOptions_AddCategory then
         local ADV_CHECK_SIZE  = 26
         local ADV_ROW_H       = 28
         local ADV_SWATCH      = 16
-        local ADV_COL_GAP     = 12   -- swatch to the next column's check
-        local ADV_LABEL_GAP   = 6    -- name to its swatch
+        local ADV_COL_GAP     = 24   -- least room from a swatch to the next column's check
+        local ADV_LABEL_GAP   = 8    -- name to its swatch
         local ADV_SECTION_GAP = 14   -- last row to the next header
         local ADV_FALLBACK_WIDTH = 395
 
@@ -1783,30 +1783,32 @@ if InterfaceOptions_AddCategory then
             return width
         end
 
-        -- Columns span the page up to the 16 px right margin. Each swatch sits
-        -- at its column's right end; a name too long for its room gets a
-        -- smaller font.
+        -- Columns span the page up to the 16 px right margin. In each column
+        -- the swatches line up just past the column's longest name, so every
+        -- swatch sits next to its name and the room left over separates it
+        -- from the next column. A name too long for its room gets a smaller
+        -- font.
         local advLayoutWidth
         local function LayoutAdvanced()
             local width = AdvPageWidth()
             if width == advLayoutWidth then return end
             advLayoutWidth = width
 
-            local colW    = math.floor((width - 32 + ADV_COL_GAP) / ADV_COLUMNS)
-            local swatchX = colW - ADV_COL_GAP - ADV_SWATCH + 2   -- from the check's left edge
-            local labelW  = swatchX - ADV_CHECK_SIZE - ADV_LABEL_GAP
+            local colW   = math.floor((width - 32 + ADV_COL_GAP) / ADV_COLUMNS)
+            -- Most room a name may take: the swatch and the gap to the next
+            -- column still fit inside the column.
+            local labelW = colW - ADV_COL_GAP - ADV_SWATCH - ADV_CHECK_SIZE - ADV_LABEL_GAP
+            if labelW < 20 then labelW = 20 end
+
+            -- First pass: pick each name's font and find each column's
+            -- longest name, across all sections so the columns stay aligned.
+            local colTextW = {}
+            for c = 0, ADV_COLUMNS - 1 do colTextW[c] = 0 end
             for k = 1, table.getn(ADV_SECTIONS) do
                 local section = ADV_SECTIONS[k]
                 for j = 1, table.getn(section.rows) do
                     local row  = section.rows[j]
                     local col  = math.mod(j - 1, ADV_COLUMNS)
-                    local line = math.floor((j - 1) / ADV_COLUMNS)
-                    row.check:ClearAllPoints()
-                    row.check:SetPoint("TOPLEFT", section.header, "BOTTOMLEFT",
-                        -2 + col * colW, -4 - line * ADV_ROW_H)
-                    row.swatch:ClearAllPoints()
-                    row.swatch:SetPoint("LEFT", row.check, "LEFT", swatchX, 0)
-
                     local text = row.text
                     text:SetFontObject(GameFontHighlight)
                     text:SetWidth(0)
@@ -1815,9 +1817,37 @@ if InterfaceOptions_AddCategory then
                     end
                     local textW = text:GetStringWidth()
                     if textW > labelW then textW = labelW end
-                    text:SetWidth(labelW)
+                    row.textW = textW
+                    if textW > colTextW[col] then colTextW[col] = textW end
+                end
+            end
+            for c = 0, ADV_COLUMNS - 1 do
+                -- Rounded up with a pixel spare so the longest name is not
+                -- cut short.
+                local w = math.ceil(colTextW[c]) + 1
+                if w > labelW then w = labelW end
+                colTextW[c] = w
+            end
+
+            -- Second pass: place the checks, names and swatches.
+            for k = 1, table.getn(ADV_SECTIONS) do
+                local section = ADV_SECTIONS[k]
+                for j = 1, table.getn(section.rows) do
+                    local row  = section.rows[j]
+                    local col  = math.mod(j - 1, ADV_COLUMNS)
+                    local line = math.floor((j - 1) / ADV_COLUMNS)
+                    local nameW = colTextW[col]
+                    row.check:ClearAllPoints()
+                    row.check:SetPoint("TOPLEFT", section.header, "BOTTOMLEFT",
+                        -2 + col * colW, -4 - line * ADV_ROW_H)
+                    row.swatch:ClearAllPoints()
+                    row.swatch:SetPoint("LEFT", row.check, "LEFT",
+                        ADV_CHECK_SIZE + nameW + ADV_LABEL_GAP, 0)
+
+                    local text = row.text
+                    text:SetWidth(nameW)
                     text:SetHeight(14)
-                    row.check:SetHitRectInsets(0, -textW, 0, 0)
+                    row.check:SetHitRectInsets(0, -row.textW, 0, 0)
                 end
             end
         end
